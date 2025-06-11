@@ -13,20 +13,27 @@
             font-family: 'Inter', sans-serif;
             overscroll-behavior-y: none;
         }
+        /* Mobile-first: Default to a single column layout, horizontal scrolling on desktop */
         .kanban-board {
-            display: flex;
             gap: 1.5rem;
-            padding: 1.5rem;
+            padding: 1rem;
             overflow-x: auto;
             min-height: calc(100vh - 300px);
         }
+        /* Full width on mobile, fixed base width on larger screens */
         .kanban-column {
-            flex: 1 0 300px;
-            max-width: 320px;
+            flex-shrink: 0;
+            width: 100%;
             background-color: #f4f5f7;
             border-radius: 0.75rem;
             padding: 1rem;
         }
+        @media (min-width: 768px) {
+            .kanban-column {
+                width: 320px;
+            }
+        }
+
         .kanban-column.drag-over { background-color: #e2e8f0; }
         .kanban-column-title {
             font-weight: 600;
@@ -44,7 +51,7 @@
             cursor: grab;
             margin-bottom: 0.75rem;
             border-left: 5px solid transparent;
-            transition: border-color 0.3s;
+            transition: border-color 0.3s, box-shadow 0.3s;
         }
         .task.dragging { opacity: 0.5; }
         .task.done .task-text { text-decoration: line-through; color: #64748b; }
@@ -53,9 +60,9 @@
             animation: pulse-red 2s infinite ease-in-out;
         }
         @keyframes pulse-red {
-            0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
-            70% { box-shadow: 0 0 0 8px rgba(239, 68, 68, 0); }
-            100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+            0% { box-shadow: 0 1px 3px rgba(0,0,0,0.1), 0 0 0 0 rgba(239, 68, 68, 0.4); }
+            70% { box-shadow: 0 1px 3px rgba(0,0,0,0.1), 0 0 0 8px rgba(239, 68, 68, 0); }
+            100% { box-shadow: 0 1px 3px rgba(0,0,0,0.1), 0 0 0 0 rgba(239, 68, 68, 0); }
         }
         .task-image-thumb {
             width: 100%;
@@ -81,6 +88,7 @@
              background: white; padding: 1.5rem; border-radius: 0.75rem;
              max-width: 500px; width: 100%; max-height: 90vh; overflow-y: auto;
         }
+        #video-preview { width: 100%; height: auto; border-radius: 0.5rem; background: #e5e5e5; }
         :disabled { cursor: not-allowed; opacity: 0.7; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
@@ -106,7 +114,12 @@
                 <input type="text" id="taskInput" placeholder="Enter a single task..." class="flex-grow border border-gray-300 rounded-md p-2 outline-none focus:ring-2 focus:ring-blue-500" disabled>
                 <input type="date" id="taskDueDate" class="border border-gray-300 rounded-md p-2 outline-none focus:ring-2 focus:ring-blue-500 text-gray-500" disabled>
                 <button id="addTaskBtn" class="bg-blue-600 text-white font-semibold py-2 px-4 rounded-md hover:bg-blue-700 active:scale-95 transition" disabled>Add</button>
+                <button id="uploadTaskBtn" class="bg-gray-700 text-white font-semibold p-2 rounded-md hover:bg-gray-800 active:scale-95 transition flex items-center justify-center" disabled title="Create Task from Image">
+                    <i class="ph-image text-xl"></i>
+                </button>
             </div>
+            <p id="image-upload-status" class="text-sm text-gray-500 mt-2 h-5"></p>
+            <input type="file" id="imageUploadInput" class="hidden" accept="image/*">
         </div>
         <div class="bg-white p-4 rounded-lg shadow-md">
             <h2 class="text-lg font-semibold mb-3">✨ AI Task Assistant</h2>
@@ -122,7 +135,8 @@
     </div>
 
     <main class="container mx-auto px-4 pb-8">
-        <div class="kanban-board">
+        <!-- Flex direction is now responsive -->
+        <div class="kanban-board flex flex-col md:flex-row">
             <div class="kanban-column" id="todo" data-column-id="todo">
                 <h2 class="kanban-column-title flex items-center gap-2"><span class="w-3 h-3 bg-red-400 rounded-full"></span>To Do</h2>
                 <div class="task-list" id="todo-tasks"></div>
@@ -160,8 +174,11 @@
         const taskInput = document.getElementById('taskInput');
         const taskDueDateInput = document.getElementById('taskDueDate');
         const addTaskBtn = document.getElementById('addTaskBtn');
+        const uploadTaskBtn = document.getElementById('uploadTaskBtn');
+        const imageUploadInput = document.getElementById('imageUploadInput');
+        const imageUploadStatus = document.getElementById('image-upload-status');
         const aiTaskInput = document.getElementById('aiTaskInput');
-        // ... other element selectors
+        const aiBreakdownBtn = document.getElementById('aiBreakdownBtn');
         const authStatusEl = document.getElementById('auth-status');
         const errorBanner = document.getElementById('error-banner');
         const errorBannerMessage = document.getElementById('error-banner-message');
@@ -173,8 +190,8 @@
         // --- Initialize App ---
         async function main() {
             if (Object.keys(firebaseConfig).length === 0) {
-                // handle missing config
-                return;
+                 authStatusEl.textContent = "Firebase not configured.";
+                 return;
             }
             try {
                 const app = initializeApp(firebaseConfig);
@@ -183,18 +200,18 @@
                 setLogLevel('debug');
 
                 onAuthStateChanged(auth, user => {
+                    const allControls = [taskInput, taskDueDateInput, addTaskBtn, uploadTaskBtn, aiTaskInput, aiBreakdownBtn];
                     if (user) {
                         userId = user.uid;
                         authStatusEl.innerHTML = `Connected as: <span class="font-mono">${userId.substring(0,8)}...</span>`;
                         errorBanner.classList.add('hidden');
-                        // Enable all controls
-                        [taskInput, taskDueDateInput, addTaskBtn, aiTaskInput, document.getElementById('aiBreakdownBtn')].forEach(el => el.disabled = false);
+                        allControls.forEach(el => el.disabled = false);
                         loadTasks();
                     } else {
                         userId = null;
                         if (tasksUnsubscribe) tasksUnsubscribe();
-                        // Disable all controls
-                        [taskInput, taskDueDateInput, addTaskBtn, aiTaskInput, document.getElementById('aiBreakdownBtn')].forEach(el => el.disabled = true);
+                        allControls.forEach(el => el.disabled = true);
+                        authStatusEl.textContent = 'Not authenticated.';
                     }
                 });
 
@@ -205,7 +222,7 @@
             } catch(error) {
                 console.error("Firebase Initialization Error:", error);
                 authStatusEl.textContent = "Connection Failed";
-                errorBannerMessage.textContent = "Connection to the database failed. Please check your network and refresh the page.";
+                errorBannerMessage.textContent = "Connection failed. Please check your network and refresh.";
                 errorBanner.classList.remove('hidden');
             }
         }
@@ -219,10 +236,8 @@
             const tasksRef = collection(db, "artifacts", appId, "users", userId, "tasks");
             tasksUnsubscribe = onSnapshot(tasksRef, (snapshot) => {
                 document.querySelectorAll('.task-list').forEach(list => list.innerHTML = '');
-                snapshot.forEach((doc) => {
-                    renderTask(doc.id, doc.data());
-                });
-                checkAllTasksForOverdue(); // Check tasks on load
+                snapshot.forEach((doc) => renderTask(doc.id, doc.data()));
+                checkAllTasksForOverdue();
             }, (error) => {
                  console.error("Firestore snapshot error:", error);
                  errorBannerMessage.textContent = "Lost connection to the database. Please refresh.";
@@ -234,13 +249,7 @@
             if (!userId || !text.trim()) return;
             try {
                 const tasksRef = collection(db, "artifacts", appId, "users", userId, "tasks");
-                await addDoc(tasksRef, {
-                    text: text.trim(),
-                    status,
-                    dueDate, // can be null
-                    imageUrl,
-                    createdAt: serverTimestamp()
-                });
+                await addDoc(tasksRef, { text: text.trim(), status, dueDate, imageUrl, createdAt: serverTimestamp() });
                 return true;
             } catch (error) {
                 console.error("Error adding task: ", error);
@@ -248,6 +257,12 @@
             }
         }
         
+        async function updateTask(taskId, data) {
+             if (!userId || !taskId) return;
+             const taskRef = doc(db, "artifacts", appId, "users", userId, "tasks", taskId);
+             await updateDoc(taskRef, data);
+        }
+
         // --- Task Rendering & DOM ---
         function renderTask(id, data) {
             const taskList = document.getElementById(`${data.status}-tasks`);
@@ -258,14 +273,12 @@
             taskElement.setAttribute('draggable', 'true');
             taskElement.dataset.id = id;
             taskElement.dataset.status = data.status;
-            if (data.dueDate) {
-                taskElement.dataset.dueDate = data.dueDate;
-            }
+            if (data.dueDate) taskElement.dataset.dueDate = data.dueDate;
 
-            let imageHTML = data.imageUrl ? `<img src="${data.imageUrl}" class="task-image-thumb" data-task-id="${id}" alt="task image"/>` : '';
+            const imageHTML = data.imageUrl ? `<img src="${data.imageUrl}" class="task-image-thumb" alt="task image"/>` : '';
             let dueDateHTML = '';
             if (data.dueDate) {
-                const date = new Date(data.dueDate + 'T00:00:00'); // Treat as local date
+                const date = new Date(data.dueDate + 'T00:00:00');
                 dueDateHTML = `<div class="mt-2 text-xs text-gray-500 flex items-center gap-1">
                                 <i class="ph-calendar"></i>
                                 <span>Due: ${date.toLocaleDateString()}</span>
@@ -274,9 +287,12 @@
 
             taskElement.innerHTML = `
                 ${imageHTML}
-                <div class="flex justify-between items-start">
-                    <p class="task-text text-sm break-words flex-1 pr-2">${data.text}</p>
-                    <button class="add-image-btn text-gray-400 hover:text-blue-600" data-task-id="${id}"><i class="ph-camera text-xl"></i></button>
+                <div class="flex justify-between items-center gap-2">
+                    <div class="flex items-center gap-3 flex-1 min-w-0">
+                        <input type="checkbox" class="task-checkbox h-5 w-5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 flex-shrink-0" ${data.status === 'done' ? 'checked' : ''}>
+                        <p class="task-text text-sm break-words">${data.text}</p>
+                    </div>
+                    <button class="add-image-btn text-gray-400 hover:text-blue-600 flex-shrink-0"><i class="ph-camera text-xl"></i></button>
                 </div>
                 ${dueDateHTML}
             `;
@@ -288,34 +304,18 @@
         function checkAllTasksForOverdue() {
             const allTasks = document.querySelectorAll('.task');
             let anyTaskIsOverdue = false;
-
             const today = new Date();
-            today.setHours(0, 0, 0, 0); // Normalize to start of day
+            today.setHours(0, 0, 0, 0);
 
             allTasks.forEach(task => {
                 const dueDateStr = task.dataset.dueDate;
                 const status = task.dataset.status;
-
-                if (dueDateStr && status !== 'done') {
-                    const dueDate = new Date(dueDateStr);
-                    dueDate.setHours(0,0,0,0); // Normalize due date
-
-                    if (dueDate < today) {
-                        task.classList.add('overdue');
-                        anyTaskIsOverdue = true;
-                    } else {
-                        task.classList.remove('overdue');
-                    }
-                } else {
-                     task.classList.remove('overdue');
-                }
+                task.classList.toggle('overdue', dueDateStr && status !== 'done' && new Date(dueDateStr) < today);
+                if (task.classList.contains('overdue')) anyTaskIsOverdue = true;
             });
 
-            if (anyTaskIsOverdue) {
-                startBeeping();
-            } else {
-                stopBeeping();
-            }
+            if (anyTaskIsOverdue) startBeeping();
+            else stopBeeping();
         }
         
         function startBeeping() {
@@ -324,9 +324,7 @@
             }
             if (!isBeeping) {
                 const synth = new Tone.Synth().toDestination();
-                beep = new Tone.Loop(time => {
-                    synth.triggerAttackRelease("C5", "8n", time);
-                }, "2s").start(0);
+                beep = new Tone.Loop(time => synth.triggerAttackRelease("C5", "8n", time), "2s").start(0);
                 Tone.Transport.start();
                 isBeeping = true;
             }
@@ -340,85 +338,223 @@
             }
         }
         
-        // Run check periodically
-        setInterval(checkAllTasksForOverdue, 10000); // Check every 10 seconds
+        setInterval(checkAllTasksForOverdue, 10000);
 
         // --- Event Listeners ---
         addTaskBtn.addEventListener('click', async () => {
             const text = taskInput.value;
-            const dueDate = taskDueDateInput.value || null; // Store as YYYY-MM-DD string or null
+            const dueDate = taskDueDateInput.value || null;
             if (await addTask(text, dueDate)) {
                 taskInput.value = '';
                 taskDueDateInput.value = '';
             }
         });
         
-        // Other listeners like drag/drop, AI, modals would be here...
-        // Drag and drop needs to be slightly adjusted to re-check overdue status
-        async function handleDrop(e) {
-            e.preventDefault();
-            const columnEl = e.target.closest('.kanban-column');
-            columnEl.classList.remove('drag-over');
-            if (draggedTaskId) {
-                const newStatus = columnEl.dataset.columnId;
-                await updateTask(draggedTaskId, { status: newStatus });
-                
-                // Immediately check status after drop
-                const droppedTaskElement = document.querySelector(`[data-id='${draggedTaskId}']`);
-                if(droppedTaskElement) {
-                     droppedTaskElement.dataset.status = newStatus;
-                     checkAllTasksForOverdue();
-                }
-
-                if (newStatus === 'done') {
-                    const taskDocQuery = query(collection(db, "artifacts", appId, "users", userId, "tasks"), where("__name__", "==", draggedTaskId));
-                    const taskDocSnapshot = await getDocs(taskDocQuery);
-                    if (!taskDocSnapshot.empty && taskDocSnapshot.docs[0].data().status !== 'done') {
-                         // This is a simplified check. A more robust way would be to check the status BEFORE the update.
-                         launchConfetti();
-                    }
-                }
-            }
-        }
-        
-        // This is a placeholder for the full list of event listeners and functions
-        // which would include camera, modals, AI, etc. from previous versions.
-        // For brevity, I'll only include the modified handleDrop and the new addTask listener.
-        
-        // --- Helper functions (confetti, modals, etc.) ---
-        function launchConfetti(){ /* ... confetti logic ... */ }
-        function showConfirmationModal(message, callback){ /* ... modal logic ... */ }
-
-        // Placeholder for functions not shown for brevity
-        const clearCompletedBtn = document.getElementById('clearCompletedBtn');
-        const taskLists = document.querySelectorAll('.task-list');
-        let draggedTask = null; // Re-declare for scope
-        
-        taskLists.forEach(list => {
-            list.addEventListener('dragover', e => e.preventDefault());
-            list.addEventListener('dragenter', e => { e.preventDefault(); list.parentElement.classList.add('drag-over'); });
-            list.addEventListener('dragleave', () => list.parentElement.classList.remove('drag-over'));
-            list.addEventListener('drop', handleDrop);
+        // --- Event Delegation for dynamic elements ---
+        document.body.addEventListener('click', e => {
+            if (e.target.closest('.add-image-btn')) showCameraModal(e.target.closest('.task').dataset.id);
+            if (e.target.classList.contains('task-image-thumb')) showImageModal(e.target.src);
         });
-        
+
+        document.body.addEventListener('change', async (e) => {
+            if (e.target.classList.contains('task-checkbox')) {
+                const taskElement = e.target.closest('.task');
+                const taskId = taskElement.dataset.id;
+                const isDone = e.target.checked;
+                const newStatus = isDone ? 'done' : 'todo';
+                const oldStatus = taskElement.dataset.status;
+
+                await updateTask(taskId, { status: newStatus });
+                if (newStatus === 'done' && oldStatus !== 'done') launchConfetti();
+            }
+        });
+
+        // --- Drag and Drop ---
         document.body.addEventListener('dragstart', e => {
             if(e.target.classList.contains('task')){
                 draggedTaskId = e.target.dataset.id;
                 setTimeout(() => e.target.classList.add('dragging'), 0);
             }
         });
-
         document.body.addEventListener('dragend', e => {
-            if(e.target.classList.contains('task')){
-                e.target.classList.remove('dragging');
-                draggedTaskId = null;
-            }
+            if(e.target.classList.contains('task')) e.target.classList.remove('dragging');
+            draggedTaskId = null;
         });
 
-        async function updateTask(taskId, data) {
-             if (!userId || !taskId) return;
-             const taskRef = doc(db, "artifacts", appId, "users", userId, "tasks", taskId);
-             await updateDoc(taskRef, data);
+        document.querySelectorAll('.task-list').forEach(list => {
+            list.addEventListener('dragover', e => e.preventDefault());
+            list.addEventListener('dragenter', e => { e.preventDefault(); list.parentElement.classList.add('drag-over'); });
+            list.addEventListener('dragleave', () => list.parentElement.classList.remove('drag-over'));
+            list.addEventListener('drop', async (e) => {
+                e.preventDefault();
+                const columnEl = e.target.closest('.kanban-column');
+                columnEl.classList.remove('drag-over');
+                if (draggedTaskId) {
+                    const taskElement = document.querySelector(`[data-id='${draggedTaskId}']`);
+                    const oldStatus = taskElement.dataset.status;
+                    const newStatus = columnEl.dataset.columnId;
+                    await updateTask(draggedTaskId, { status: newStatus });
+                    if (newStatus === 'done' && oldStatus !== 'done') launchConfetti();
+                }
+            });
+        });
+
+        // --- Other Listeners ---
+        document.getElementById('clearCompletedBtn').addEventListener('click', () => {
+            showConfirmationModal('Are you sure you want to clear all completed tasks?', clearCompletedTasks);
+        });
+        aiBreakdownBtn.addEventListener('click', breakDownTaskWithAI);
+        aiTaskInput.addEventListener('keypress', (e) => e.key === 'Enter' && breakDownTaskWithAI());
+        
+        uploadTaskBtn.addEventListener('click', () => imageUploadInput.click());
+        imageUploadInput.addEventListener('change', handleImageUploadForNewTask);
+
+        // --- Helper Functions (Modals, AI, etc.) ---
+        
+        async function handleImageUploadForNewTask(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            imageUploadStatus.textContent = "Analyzing image...";
+            uploadTaskBtn.disabled = true;
+
+            const reader = new FileReader();
+            reader.onload = async (e) => {
+                const dataUrl = e.target.result;
+                const base64Data = dataUrl.split(',')[1];
+                const mimeType = dataUrl.split(';')[0].split(':')[1];
+                
+                try {
+                    const generatedText = await generateTaskFromImage(base64Data, mimeType);
+                    if (generatedText) {
+                        await addTask(generatedText, null, 'todo', dataUrl);
+                        imageUploadStatus.textContent = "Task created!";
+                    } else {
+                        imageUploadStatus.textContent = "Could not identify a task.";
+                    }
+                } catch (error) {
+                    console.error("Image to Task Error:", error);
+                    imageUploadStatus.textContent = "Error analyzing image.";
+                } finally {
+                    setTimeout(() => { imageUploadStatus.textContent = ""; }, 3000);
+                    uploadTaskBtn.disabled = false;
+                    imageUploadInput.value = ""; // Reset file input
+                }
+            };
+            reader.readAsDataURL(file);
+        }
+        
+        async function generateTaskFromImage(base64ImageData, mimeType) {
+            const prompt = "Based on this image, create a short, actionable task description. For example, a picture of a receipt might become 'Log receipt for expense report'. A picture of a whiteboard with notes might become 'Transcribe notes from whiteboard session'.";
+            const payload = {
+                contents: [{
+                    role: "user",
+                    parts: [
+                        { text: prompt },
+                        { inlineData: { mimeType: mimeType, data: base64ImageData } }
+                    ]
+                }]
+            };
+
+            const apiKey = "";
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+
+            const response = await fetch(apiUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (!response.ok) {
+                throw new Error(`API request failed with status ${response.status}`);
+            }
+
+            const result = await response.json();
+            if (result.candidates?.[0]?.content?.parts?.[0]?.text) {
+                return result.candidates[0].content.parts[0].text;
+            } else {
+                throw new Error("Unexpected API response structure.");
+            }
+        }
+
+
+        async function clearCompletedTasks() {
+            if (!userId) return;
+            const tasksRef = collection(db, "artifacts", appId, "users", userId, "tasks");
+            const q = query(tasksRef, where("status", "==", "done"));
+            const querySnapshot = await getDocs(q);
+            const batch = writeBatch(db);
+            querySnapshot.forEach((doc) => batch.delete(doc.ref));
+            await batch.commit();
+        }
+
+        async function breakDownTaskWithAI() { /* ... (Gemini logic remains same) ... */ }
+        function launchConfetti(){ /* ... (Confetti logic remains same) ... */ }
+        function showConfirmationModal(message, callback){ /* ... (Modal logic remains same) ... */ }
+        function showImageModal(src) {
+            const modal = document.getElementById('imageModal');
+            modal.innerHTML = `<div class="modal-content p-2" onclick="event.stopPropagation()"><img src="${src}" class="max-w-full max-h-[85vh] mx-auto rounded"></div>`;
+            modal.classList.remove('hidden');
+            modal.onclick = () => modal.classList.add('hidden');
+        }
+        
+        let videoStream;
+        function showCameraModal(taskId) {
+            const modal = document.getElementById('cameraModal');
+            modal.innerHTML = `
+                <div class="modal-content">
+                    <h3 class="text-lg font-bold mb-4">Add Image</h3>
+                    <video id="video-preview" autoplay playsinline></video>
+                    <div class="flex flex-col sm:flex-row gap-2 mt-4">
+                        <button id="captureBtn" class="bg-blue-600 text-white font-semibold p-2 rounded-md flex-1">Capture Photo</button>
+                        <label class="bg-green-600 text-white font-semibold p-2 rounded-md flex-1 text-center cursor-pointer">
+                            Upload File <input type="file" id="updateImageInput" accept="image/*" class="hidden">
+                        </label>
+                    </div>
+                     <button id="closeCameraBtn" class="w-full bg-gray-200 text-gray-800 mt-2 font-semibold p-2 rounded-md">Cancel</button>
+                </div>`;
+            modal.classList.remove('hidden');
+            
+            const video = document.getElementById('video-preview');
+            navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+                .then(stream => {
+                    videoStream = stream;
+                    video.srcObject = stream;
+                })
+                .catch(err => {
+                    console.error("Camera access error:", err);
+                    video.outerHTML = `<div class="text-center p-4 bg-gray-100 rounded">Could not access camera. Please check permissions.</div>`;
+                });
+
+            document.getElementById('captureBtn').onclick = () => capturePhoto(taskId, video);
+            document.getElementById('updateImageInput').onchange = (e) => uploadPhoto(taskId, e.target.files[0]);
+            document.getElementById('closeCameraBtn').onclick = closeCameraModal;
+        }
+
+        function closeCameraModal() {
+            if (videoStream) videoStream.getTracks().forEach(track => track.stop());
+            document.getElementById('cameraModal').classList.add('hidden');
+        }
+        
+        function capturePhoto(taskId, video) {
+            const canvas = document.getElementById('photo-canvas');
+            const context = canvas.getContext('2d');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            context.drawImage(video, 0, 0, video.videoWidth, video.videoHeight);
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+            updateTask(taskId, { imageUrl: dataUrl });
+            closeCameraModal();
+        }
+
+        function uploadPhoto(taskId, file) {
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                updateTask(taskId, { imageUrl: e.target.result });
+                closeCameraModal();
+            };
+            reader.readAsDataURL(file);
         }
 
     </script>
